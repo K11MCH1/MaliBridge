@@ -376,6 +376,7 @@ extern int vkb_npds;
 /* server_memory.c */
 extern PFN_vkGetDeviceProcAddr vkb_mem_gdpa;
 int vkb_mem_dmaheap_available(void);
+int vkb_mem_export_pages_available(void);
 void vkb_mem_export_install(vkb_srv_table *t);
 void vkb_mem_instance_install(vkb_srv_table *t); /* VKBRIDGE_FAKE_MISSING=lazymem: Mali's memory types (host tests) */
 void vkb_mem_device_install(vkb_srv_table *t);   /* VKBRIDGE_FAKE_MISSING=dmabuftypes: Mali's dma-buf fd properties (host tests) */

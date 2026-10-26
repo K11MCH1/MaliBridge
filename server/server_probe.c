@@ -3280,7 +3280,7 @@ static uint32_t emu_possible(const pctx *c)
     uint32_t m = VKB_EMU_IMPLEMENTED;
     if (!c->feat.depthClamp) m &= ~VKB_EMU_DEPTH_CLIP;
     if (!vkb_emu_bcn_supported(c->idt, c->pd)) m &= ~VKB_EMU_BCN;
-    if (!vkb_mem_dmaheap_available()) m &= ~VKB_EMU_DMABUF_EXPORT;
+    if (!vkb_mem_export_pages_available()) m &= ~VKB_EMU_DMABUF_EXPORT;
     return m;
 }
 

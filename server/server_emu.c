@@ -451,8 +451,9 @@ uint32_t vkb_emu_detect(const vkb_dispatch *idt, VkPhysicalDevice pd, uint32_t *
         }
     }
     /* dma-buf export of images (gamescope's nested backend needs it): emulated with dma-heap pages
-     * where the driver imports dma-bufs into images but exports none (Mali). */
-    if (!env_off("VKBRIDGE_EMU_DMABUF_EXPORT") && vkb_mem_dmaheap_available()) {
+     * (else a BLOB AHardwareBuffer's) where the driver imports dma-bufs into images but exports none
+     * (Mali). */
+    if (!env_off("VKBRIDGE_EMU_DMABUF_EXPORT") && vkb_mem_export_pages_available()) {
         int can_export = 0, can_import = 0;
         if (idt->vkGetPhysicalDeviceImageFormatProperties2) {
             /* Asked as gamescope asks: a linear DRM modifier (Mali answers import questions only so). */

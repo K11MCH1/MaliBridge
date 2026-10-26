@@ -439,6 +439,17 @@ static int dmaheap_fd(void)
 
 int vkb_mem_dmaheap_available(void) { return dmaheap_fd() >= 0; }
 
+/* Pages for the dma-buf export emulation: the dma-heap's, else (Android) a BLOB AHardwareBuffer's. */
+int vkb_mem_export_pages_available(void)
+{
+    if (dmaheap_fd() >= 0) return 1;
+#ifdef __ANDROID__
+    return ahb_load();
+#else
+    return 0;
+#endif
+}
+
 /* The cached system heap, for cached readback (opened once; -1 when there is none). */
 static int dmaheap_cached_fd(void)
 {
@@ -750,7 +761,42 @@ static VkResult alloc_shared(const vkb_dispatch *dt, VkDevice dev, uint32_t s, c
  * exportable. Emulated (VKB_EMU_DMABUF_EXPORT): an allocation that asks to export a dma-buf gets
  * pages from the dma-heap, imported into the driver; vkGetMemoryFdKHR hands out those pages. The
  * driver keeps choosing the image's layout; the importer learns it from the modifier as usual.
+ * Without a dma-heap (Android 11 on kernel 4.14, which has ION only: Mali-G76 r26p0) the pages are
+ * a BLOB AHardwareBuffer's dma-buf; the dma-buf keeps them alive once the buffer is released.
  */
+static int export_pages(uint64_t len, const char **from)
+{
+    int hfd = dmaheap_fd();
+    if (hfd >= 0) {
+        struct dma_heap_allocation_data hd = {len, 0, O_RDWR | O_CLOEXEC, 0};
+        if (ioctl(hfd, DMA_HEAP_IOCTL_ALLOC, &hd) < 0) {
+            VKB_ERR("export emulation: dma-heap allocation of %llu bytes failed: %s", (unsigned long long)len, strerror(errno));
+            return -1;
+        }
+        *from = "the dma-heap";
+        return (int)hd.fd;
+    }
+#ifdef __ANDROID__
+    if (!ahb_load() || len > 0xFFFFFFFFull) return -1;
+    vkb_ahb_desc d = {(uint32_t)len, 1, 1, AHB_FORMAT_BLOB, AHB_USAGE_GPU_DATA_BUFFER | 2ull /* CPU_READ_RARELY */, 0, 0, 0};
+    struct AHardwareBuffer *ahb = NULL;
+    int ar = p_AHardwareBuffer_allocate(&d, &ahb);
+    if (ar != 0 || !ahb) {
+        VKB_ERR("export emulation: AHardwareBuffer_allocate(%llu bytes) failed: %d", (unsigned long long)len, ar);
+        return -1;
+    }
+    const vkb_native_handle *nh = p_AHardwareBuffer_getNativeHandle(ahb);
+    int fd = -1;
+    for (int i = 0; nh && i < nh->numFds && fd < 0; i++)
+        if (lseek(nh->data[i], 0, SEEK_END) >= (off_t)len) fd = fcntl(nh->data[i], F_DUPFD_CLOEXEC, 0);
+    p_AHardwareBuffer_release(ahb);
+    if (fd < 0) VKB_ERR("export emulation: no dma-buf of %llu bytes in the AHardwareBuffer's handle", (unsigned long long)len);
+    *from = "a BLOB AHardwareBuffer";
+    return fd;
+#else
+    return -1;
+#endif
+}
 static int wants_dmabuf_export(const VkMemoryAllocateInfo *ai)
 {
     for (const VkBaseInStructure *b = ai->pNext; b; b = b->pNext)
@@ -763,15 +809,10 @@ static int wants_dmabuf_export(const VkMemoryAllocateInfo *ai)
 static VkResult alloc_exportable(vkb_srv_table *t, VkMemoryAllocateInfo *ai, vkb_srv_mem *m)
 {
     const vkb_dispatch *dt = &t->real;
-    int hfd = dmaheap_fd();
-    if (hfd < 0) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     uint64_t len = (ai->allocationSize + 4095) & ~4095ull;
-    struct dma_heap_allocation_data hd = {len, 0, O_RDWR | O_CLOEXEC, 0};
-    if (ioctl(hfd, DMA_HEAP_IOCTL_ALLOC, &hd) < 0) {
-        VKB_ERR("export emulation: dma-heap allocation of %llu bytes failed: %s", (unsigned long long)len, strerror(errno));
-        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    }
-    int fd = (int)hd.fd;
+    const char *from = "";
+    int fd = export_pages(len, &from);
+    if (fd < 0) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     VkMemoryFdPropertiesKHR fp = {VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
     if (!dt->vkGetMemoryFdPropertiesKHR ||
         dt->vkGetMemoryFdPropertiesKHR(t->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fp) != VK_SUCCESS)
@@ -836,12 +877,12 @@ static VkResult alloc_exportable(vkb_srv_table *t, VkMemoryAllocateInfo *ai, vkb
         int still_dedicated = 0;
         for (const VkBaseInStructure *b = imp.pNext; b; b = b->pNext) still_dedicated |= b->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
         struct stat fst;
-        VKB_INFO("export emulation: memory %llx (%llu bytes, pid %d, dma-buf ino %lu) for image %llx%s", (unsigned long long)(uintptr_t)m->mem,
-                 (unsigned long long)len, t->proc ? t->proc->pid : 0, fstat(fd, &fst) == 0 ? (unsigned long)fst.st_ino : 0UL,
-                 (unsigned long long)(uintptr_t)ded_img,
+        VKB_INFO("export emulation: memory %llx (%llu bytes from %s, pid %d, dma-buf ino %lu) for image %llx%s",
+                 (unsigned long long)(uintptr_t)m->mem, (unsigned long long)len, from, t->proc ? t->proc->pid : 0,
+                 fstat(fd, &fst) == 0 ? (unsigned long)fst.st_ino : 0UL, (unsigned long long)(uintptr_t)ded_img,
                  still_dedicated ? "" : " (imported without the dedicated struct)");
     }
-    VKB_DBG("export emulation: %llu bytes from the dma-heap, type %u", (unsigned long long)len, info.memoryTypeIndex);
+    VKB_DBG("export emulation: %llu bytes from %s, type %u", (unsigned long long)len, from, info.memoryTypeIndex);
     return VK_SUCCESS;
 }
 

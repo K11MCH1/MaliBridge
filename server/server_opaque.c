@@ -86,11 +86,11 @@ int vkb_opaque_wanted(const vkb_dispatch *idt, VkPhysicalDevice pd, uint32_t emu
     if (vkb_emu_faked("opaquefd")) opaque = 0;
     if ((opaque & BOTH_WAYS) == BOTH_WAYS) return 0;
     VkExternalMemoryFeatureFlags dmabuf = buffer_features(idt, pd, DMABUF);
-    /* Imports must work; exports come from the driver or from the dma-heap emulation. */
+    /* Imports must work; exports come from the driver or from the export emulation (server_memory.c). */
     int import = (dmabuf & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) || (emu & VKB_EMU_DMABUF_EXPORT);
     int export = (dmabuf & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) || (emu & VKB_EMU_DMABUF_EXPORT);
     VKB_INFO("opaque fd emulation: driver opaque fd features 0x%x, dma-buf 0x%x%s -> %s", opaque, dmabuf,
-             emu & VKB_EMU_DMABUF_EXPORT ? " (+ dma-heap export)" : "", import && export ? "on" : "not possible");
+             emu & VKB_EMU_DMABUF_EXPORT ? " (+ export emulation)" : "", import && export ? "on" : "not possible");
     return import && export;
 }
 
