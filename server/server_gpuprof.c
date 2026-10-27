@@ -16,8 +16,10 @@
  * saved as dump-spirv/g-<hash>.spv). Subnautica (2026-10-12): GPU 98 % busy at 1300 MHz for 6 fps
  * on 1200 draws in 52 passes at 1280x720, and DXVK's HUD could not say which; this showed a
  * 160x128 pass taking 75 + 37 ms a frame, its draws DXVK's stream output geometry shaders (fixed by
- * the fold in server_emu_shader.c). VKBRIDGE_GPU_PROF=2 also splits passes by their first pipeline
- * and saves every module's SPIR-V under dump-spirv/ by that hash.
+ * the fold in server_emu_shader.c). VKBRIDGE_GPU_PROF=2 also splits passes by their first pipeline,
+ * gives each dispatch a span of its own (consecutive dispatches otherwise share one: Crash Bandicoot
+ * 4's 78 ms span held a 69 ms dispatch and two small ones) and saves every module's SPIR-V under
+ * dump-spirv/ by that hash.
  * Subnautica paused underwater after the fold (2026-10-12, ~23 ms GPU a frame at ~33 fps): the split
  * spans showed no bridge work of note (no uploads, 0.5 ms of the game's copies; the dispatches are
  * its ocean FFT), every attachment and decoded BC texture kept AFBC, and =2 named the costliest
@@ -575,7 +577,7 @@ static void op(vkb_gprof *g, VkCommandBuffer cb, int kind)
     pthread_mutex_lock(&g->lock);
     gp_cb *e = cb_get(g, cb, 0);
     gp_seg *s = open_seg(e);
-    if (s && s->kind == SEG_BETWEEN && s->sub != kind) {
+    if (s && s->kind == SEG_BETWEEN && (s->sub != kind || (by_pipe && kind == OP_DISPATCH && s->dispatches))) {
         s = next_seg(g, e, cb);
         if (s) s->sub = (uint8_t)kind;
     }
